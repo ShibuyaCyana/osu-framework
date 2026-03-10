@@ -9,7 +9,7 @@ using osu.Framework.Extensions.ObjectExtensions;
 
 namespace osu.Framework.Audio.Sample
 {
-    internal sealed class SampleChannelBass : SampleChannel, IBassAudioChannel
+    internal sealed class SampleChannelBass : SampleChannel, IBassAudioChannel, IBassAudio
     {
         private readonly SampleBass sample;
         private volatile int channel;
@@ -232,6 +232,24 @@ namespace osu.Framework.Audio.Sample
         bool IBassAudioChannel.MixerChannelPaused { get; set; } = true;
 
         BassAudioMixer IBassAudioChannel.Mixer => bassMixer;
+
+        void IBassAudio.UpdateDevice(int deviceIndex)
+        {
+            if (userRequestedPlay)  // Only if user wants it playing
+            {
+                EnqueueAction(() =>
+                {
+                    // Force channel recreation - old channel is stale
+                    channel = 0;
+                    ensureChannel();
+
+                    if (hasChannel)
+                    {
+                        playInternal();
+                    }
+                });
+            }
+        }
 
         #endregion
 

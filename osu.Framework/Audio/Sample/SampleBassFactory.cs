@@ -68,6 +68,13 @@ namespace osu.Framework.Audio.Sample
             // The sample may not have already loaded if a device wasn't present in a previous load attempt.
             if (!IsLoaded)
                 loadSample();
+
+            // Propagate device update to all active Sample objects in Items
+            foreach (var item in Items)
+            {
+                if (item is IBassAudio bassAudio)
+                    bassAudio.UpdateDevice(deviceIndex);
+            }
         }
 
         private void loadSample()

@@ -395,6 +395,20 @@ namespace osu.Framework.Audio.Mixing.Bass
             BassMix.MixerRemoveChannel(channel.Handle);
         }
 
+        public void RemoveFromActiveChannels(IBassAudioChannel channel)
+        {
+            activeChannels.Remove(channel);
+        }
+
+        /// <summary>
+        /// Removes a channel from the pending channels list.
+        /// Called when a channel is explicitly stopped or being recreated.
+        /// </summary>
+        public void RemoveFromPendingChannels(IBassAudioChannel channel)
+        {
+            pendingChannels.Remove(channel);
+        }
+
         /// <summary>
         /// Flushes the mixer, causing pause and seek events to take effect immediately.
         /// </summary>

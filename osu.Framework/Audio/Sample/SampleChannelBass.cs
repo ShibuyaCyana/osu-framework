@@ -146,6 +146,13 @@ namespace osu.Framework.Audio.Sample
 
             EnqueueAction(() =>
             {
+                // Clean up channel from mixer tracking when explicitly stopped
+                // Check if mixer exists (might be null during disposal or if never added)
+                if (Mixer != null)
+                {
+                    bassMixer.RemoveFromActiveChannels(this);
+                    bassMixer.RemoveFromPendingChannels(this);
+                }
                 stopInternal();
                 playing = false;
             });
@@ -235,11 +242,18 @@ namespace osu.Framework.Audio.Sample
 
         void IBassAudio.UpdateDevice(int deviceIndex)
         {
-            if (userRequestedPlay)  // Only if user wants it playing
+            if (userRequestedPlay)
             {
                 EnqueueAction(() =>
                 {
-                    // Force channel recreation - old channel is stale
+                    // This channel handle will become stale (valid but no sound) with device switch & mixer recreate
+                    // We clean it up and get a new one
+                    // So that samples (especially looping ones) would continue playing after device switch
+                    if (Mixer != null)
+                    {
+                        bassMixer.RemoveFromActiveChannels(this);
+                        bassMixer.RemoveFromPendingChannels(this);
+                    }
                     channel = 0;
                     ensureChannel();
 

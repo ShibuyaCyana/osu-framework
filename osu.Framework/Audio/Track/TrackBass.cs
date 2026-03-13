@@ -456,6 +456,8 @@ namespace osu.Framework.Audio.Track
 
         BassAudioMixer IBassAudioChannel.Mixer => bassMixer;
 
+        bool IBassAudioChannel.IsPlaybackRequested => isPlayed;
+
         #endregion
 
         ~TrackBass()

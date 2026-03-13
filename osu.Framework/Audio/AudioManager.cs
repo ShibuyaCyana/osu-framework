@@ -9,6 +9,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using JetBrains.Annotations;
 using ManagedBass;
 using ManagedBass.Fx;
@@ -169,6 +170,21 @@ namespace osu.Framework.Audio
         internal IBindableList<AudioMixer> ActiveMixers => activeMixers;
         private readonly BindableList<AudioMixer> activeMixers = new BindableList<AudioMixer>();
 
+        /// <summary>
+        /// The currently active audio backend type.
+        /// </summary>
+        public AudioBackendType CurrentBackendType { get; private set; } = AudioBackendType.Bass;
+
+        /// <summary>
+        /// The currently active device index.
+        /// </summary>
+        public int CurrentDeviceIndex { get; private set; }
+
+        /// <summary>
+        /// Coordinator for complex device switching operations.
+        /// </summary>
+        private AudioDeviceSwitchCoordinator? deviceSwitchCoordinator;
+
         private readonly Lazy<TrackStore> globalTrackStore;
         private readonly Lazy<SampleStore> globalSampleStore;
 
@@ -195,13 +211,16 @@ namespace osu.Framework.Audio
                 config.BindWith(FrameworkSetting.VolumeMusic, VolumeTrack);
             }
 
-            AudioDevice.ValueChanged += _ => scheduler.AddOnce(initCurrentDevice);
-            UseExperimentalWasapi.ValueChanged += _ => scheduler.AddOnce(initCurrentDevice);
+            AudioDevice.ValueChanged += _ => scheduler.AddOnce(onDeviceChanged);
+            UseExperimentalWasapi.ValueChanged += _ => scheduler.AddOnce(onDeviceChanged);
             // initCurrentDevice not required for changes to `GlobalMixerHandle` as it is only changed when experimental wasapi is toggled (handled above).
             GlobalMixerHandle.ValueChanged += handle => usingGlobalMixer.Value = handle.NewValue.HasValue;
 
             AddItem(TrackMixer = createAudioMixer(null, nameof(TrackMixer)));
             AddItem(SampleMixer = createAudioMixer(null, nameof(SampleMixer)));
+
+            // Initialize the device switch coordinator
+            deviceSwitchCoordinator = new AudioDeviceSwitchCoordinator(this, audioThread);
 
             globalTrackStore = new Lazy<TrackStore>(() =>
             {
@@ -275,6 +294,33 @@ namespace osu.Framework.Audio
             var mixer = new BassAudioMixer(this, fallbackMixer, identifier);
             AddItem(mixer);
             return mixer;
+        }
+
+        /// <summary>
+        /// Switches to a new audio device with proper async coordination.
+        /// </summary>
+        /// <param name="deviceId">The device ID to switch to.</param>
+        /// <param name="backendType">The type of audio backend.</param>
+        /// <returns>A task that completes when the switch is done.</returns>
+        public async Task SwitchDeviceAsync(int deviceId, AudioBackendType backendType)
+        {
+            if (deviceSwitchCoordinator == null)
+                throw new InvalidOperationException("Device switch coordinator not initialized");
+
+            CurrentDeviceIndex = deviceId;
+            CurrentBackendType = backendType;
+
+            await deviceSwitchCoordinator.SwitchDeviceAsync(deviceId, backendType);
+        }
+
+        /// <summary>
+        /// Attempts to set the current audio device.
+        /// </summary>
+        /// <param name="deviceId">The device ID to set.</param>
+        /// <returns>True if successful, false otherwise.</returns>
+        internal bool TrySetDevice(int deviceId)
+        {
+            return TrySetDeviceInternal(deviceId);
         }
 
         protected override void ItemAdded(AudioComponent item)
@@ -351,25 +397,88 @@ namespace osu.Framework.Audio
 
             bool trySetDevice(int deviceId)
             {
-                var device = audioDevices.ElementAtOrDefault(deviceId);
-
-                // device is invalid
-                if (!device.IsEnabled)
-                    return false;
-
-                // we don't want bass initializing with real audio device on headless test runs.
-                if (deviceId != Bass.NoSoundDevice && DebugUtils.IsNUnitRunning)
-                    return false;
-
-                // initialize new device
-                if (!InitBass(deviceId))
-                    return false;
-
-                //we have successfully initialised a new device.
-                UpdateDevice(deviceId);
-
-                return true;
+                return TrySetDeviceInternal(deviceId);
             }
+        }
+
+        /// <summary>
+        /// Internal method to try setting a device. Used by both initCurrentDevice and the coordinator.
+        /// </summary>
+        private bool TrySetDeviceInternal(int deviceId)
+        {
+            var device = audioDevices.ElementAtOrDefault(deviceId);
+
+            // device is invalid
+            if (!device.IsEnabled)
+                return false;
+
+            // we don't want bass initializing with real audio device on headless test runs.
+            if (deviceId != Bass.NoSoundDevice && DebugUtils.IsNUnitRunning)
+                return false;
+
+            // initialize new device
+            if (!InitBass(deviceId))
+                return false;
+
+            //we have successfully initialised a new device.
+            UpdateDevice(deviceId);
+
+            return true;
+        }
+
+        /// <summary>
+        /// Called when AudioDevice or backend type changes. Uses the coordinator for complex switches.
+        /// </summary>
+        private void onDeviceChanged()
+        {
+            if (deviceSwitchCoordinator == null)
+            {
+                // Fallback to old method if coordinator not initialized
+                initCurrentDevice();
+                return;
+            }
+
+            string deviceName = AudioDevice.Value;
+            int deviceIndex = audioDeviceNames.FindIndex(d => d == deviceName);
+
+            if (deviceIndex < 0)
+            {
+                // Default device
+                deviceIndex = Bass.DefaultDevice;
+            }
+            else
+            {
+                // Offset by internal device count
+                deviceIndex = BASS_INTERNAL_DEVICE_COUNT + deviceIndex;
+            }
+
+            CurrentDeviceIndex = deviceIndex;
+
+            // Determine backend type from current settings
+            AudioBackendType backendType = UseExperimentalWasapi.Value 
+                ? AudioBackendType.Wasapi 
+                : AudioBackendType.Bass;
+            CurrentBackendType = backendType;
+
+            // Fire and forget - the coordinator handles the async work
+#pragma warning disable CS4014 // Fire-and-forget is intentional here
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await deviceSwitchCoordinator.SwitchDeviceAsync(deviceIndex, backendType)
+                        .ConfigureAwait(false);
+
+                    Logger.Log($"Device switch completed via coordinator: {deviceName} ({backendType})");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"Device switch failed: {ex}", level: LogLevel.Error);
+                    // Fallback to old method on failure
+                    scheduler.Add(initCurrentDevice);
+                }
+            });
+#pragma warning restore CS4014
         }
 
         /// <summary>

@@ -2,6 +2,7 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
+using System.Threading.Tasks;
 using osu.Framework.Timing;
 
 namespace osu.Framework.Audio.Track
@@ -60,5 +61,10 @@ namespace osu.Framework.Audio.Track
         /// Restarts this track from the <see cref="Track.RestartPoint"/> while retaining adjustments.
         /// </summary>
         void Restart();
+
+        /// <summary>
+        /// Stops this track. Can be awaited for completion on the audio thread.
+        /// </summary>
+        Task StopAsync();
     }
 }

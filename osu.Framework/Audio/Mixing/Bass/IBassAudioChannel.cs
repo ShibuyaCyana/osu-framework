@@ -27,5 +27,10 @@ namespace osu.Framework.Audio.Mixing.Bass
         bool MixerChannelPaused { get; set; }
 
         new BassAudioMixer Mixer { get; }
+
+        /// <summary>
+        /// Whether the user has requested playback. This persists across device changes.
+        /// </summary>
+        bool IsPlaybackRequested { get; }
     }
 }

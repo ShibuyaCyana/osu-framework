@@ -28,7 +28,7 @@ namespace osu.Framework.Audio.Mixing.Bass
         /// <summary>
         /// The list of channels which are currently active in the BASS mix.
         /// </summary>
-        private readonly List<IBassAudioChannel> activeChannels = new List<IBassAudioChannel>();
+        internal readonly List<IBassAudioChannel> activeChannels = new List<IBassAudioChannel>();
 
         /// <summary>
         /// The list of channels which are pending addition to the BASS mix.
@@ -273,9 +273,13 @@ namespace osu.Framework.Audio.Mixing.Bass
 
         public void UpdateDevice(int deviceIndex)
         {
+            Logger.Log($"[BassAudioMixer:{Identifier}] UpdateDevice({deviceIndex}) called - Current Handle: {Handle}");
+            
             // It's important that we re-create the mixer after a device change.
             // The mixer may need to be initialised with different flags depending on the state of global mixer usage.
             createMixer();
+            
+            Logger.Log($"[BassAudioMixer:{Identifier}] UpdateDevice completed - New Handle: {Handle}, ActiveChannels: {activeChannels.Count}");
         }
 
         protected override void UpdateState()
@@ -317,21 +321,37 @@ namespace osu.Framework.Audio.Mixing.Bass
 
         private void createMixer()
         {
+            Logger.Log($"[BassAudioMixer:{Identifier}] createMixer() called");
+            Logger.Log($"[BassAudioMixer:{Identifier}] Current Handle: {Handle}, Pending channels: {pendingChannels.Count}, Active channels: {activeChannels.Count}");
+            
             if (Handle != 0)
+            {
+                Logger.Log($"[BassAudioMixer:{Identifier}] Freeing old mixer handle {Handle}");
                 ManagedBass.Bass.StreamFree(Handle);
+            }
 
             // Make sure that bass is initialised before trying to create a mixer.
             // If not, this will be called again when the device is initialised via UpdateDevice().
             if (!ManagedBass.Bass.GetDeviceInfo(ManagedBass.Bass.CurrentDevice, out var deviceInfo) || !deviceInfo.IsInitialized)
+            {
+                Logger.Log($"[BassAudioMixer:{Identifier}] BASS not initialized yet, skipping mixer creation");
                 return;
+            }
+            
+            Logger.Log($"[BassAudioMixer:{Identifier}] BASS device {ManagedBass.Bass.CurrentDevice} is initialized, creating mixer...");
 
             Handle = manager?.GlobalMixerHandle.Value != null
                 // The decode flag here is super important to maintain the lowest latency audio output.
                 ? BassMix.CreateMixerStream(frequency, 2, BassFlags.MixerNonStop | BassFlags.Decode)
                 : BassMix.CreateMixerStream(frequency, 2, BassFlags.MixerNonStop);
+            
+            Logger.Log($"[BassAudioMixer:{Identifier}] Created mixer with Handle: {Handle}");
 
             if (Handle == 0)
+            {
+                Logger.Log($"[BassAudioMixer:{Identifier}] FAILED to create mixer! LastError: {ManagedBass.Bass.LastError}", LoggingTarget.Runtime, LogLevel.Error);
                 return;
+            }
 
             // Lower latency is valued more for the time since we are not using complex DSP effects. Disable buffering on the mixer channel in order for data to be produced immediately.
             ManagedBass.Bass.ChannelSetAttribute(Handle, ChannelAttribute.Buffer, 0);
@@ -339,28 +359,37 @@ namespace osu.Framework.Audio.Mixing.Bass
             // Register all channels that were previously added prior to the mixer being loaded.
             // These channels were queued in pendingChannels but not yet added to the BASS mix.
             var toAdd = pendingChannels.ToArray();
+            Logger.Log($"[BassAudioMixer:{Identifier}] Processing {toAdd.Length} pending channels");
             pendingChannels.Clear();
 
             foreach (var channel in toAdd)
             {
+                Logger.Log($"[BassAudioMixer:{Identifier}] Processing pending channel with Handle: {channel.Handle}");
                 if (channel.Handle == 0)
                 {
                     // Channel is not yet initialized, keep it pending for later processing
+                    Logger.Log($"[BassAudioMixer:{Identifier}] Channel not ready, keeping pending");
                     pendingChannels.Add(channel);
                 }
                 else
                 {
+                    Logger.Log($"[BassAudioMixer:{Identifier}] Adding channel to BASS mix");
                     AddToBassMixAndPlay(channel);
                 }
             }
 
             if (pendingChannels.Count > 0)
-                Logger.Log($"BassAudioMixer '{Identifier}' has {pendingChannels.Count} pending channels after mixer creation", LoggingTarget.Runtime, LogLevel.Important);
+                Logger.Log($"[BassAudioMixer:{Identifier}] has {pendingChannels.Count} pending channels after mixer creation", LoggingTarget.Runtime, LogLevel.Important);
 
             if (manager?.GlobalMixerHandle.Value != null)
+            {
+                Logger.Log($"[BassAudioMixer:{Identifier}] Adding to global mixer");
                 BassMix.MixerAddChannel(manager.GlobalMixerHandle.Value.Value, Handle, BassFlags.MixerChanBuffer | BassFlags.MixerChanNoRampin);
+            }
 
+            Logger.Log($"[BassAudioMixer:{Identifier}] Starting mixer playback");
             ManagedBass.Bass.ChannelPlay(Handle);
+            Logger.Log($"[BassAudioMixer:{Identifier}] Mixer is now playing");
         }
 
         /// <summary>

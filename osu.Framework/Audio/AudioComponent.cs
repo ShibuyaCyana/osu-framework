@@ -36,7 +36,7 @@ namespace osu.Framework.Audio
         /// </summary>
         /// <param name="action">The action to perform.</param>
         /// <returns>A task which can be used for continuation logic. May return a <see cref="Task.CompletedTask"/> if called while already on the audio thread.</returns>
-        protected Task EnqueueAction(Action action)
+        internal Task EnqueueAction(Action action)
         {
             if (CanPerformInline)
             {

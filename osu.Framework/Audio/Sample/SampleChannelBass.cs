@@ -6,6 +6,7 @@ using ManagedBass;
 using osu.Framework.Audio.Mixing.Bass;
 using osu.Framework.Audio.Track;
 using osu.Framework.Extensions.ObjectExtensions;
+using osu.Framework.Logging;
 
 namespace osu.Framework.Audio.Sample
 {
@@ -179,18 +180,28 @@ namespace osu.Framework.Audio.Sample
                 return false;
 
             // Ensure state is correct before starting.
+            Logger.Log($"[SampleChannelBass:{Name}] playInternal() - Invalidating state");
             InvalidateState();
 
             // Bass will restart the sample if it has reached its end. This behavior isn't desirable so block locally.
             // Unlike TrackBass, sample channels can't have sync callbacks attached, so the stopped state is used instead
             // to indicate the natural stoppage of a sample as a result of having reaching the end.
             if (Played && bassMixer.ChannelIsActive(this) == PlaybackState.Stopped)
+            {
+                Logger.Log($"[SampleChannelBass:{Name}] playInternal() - Sample already played and stopped, returning false");
                 return false;
+            }
 
             if (relativeFrequencyHandler.IsFrequencyZero)
+            {
+                Logger.Log($"[SampleChannelBass:{Name}] playInternal() - Frequency is zero, returning true");
                 return true;
+            }
 
-            return bassMixer.AddToBassMixAndPlay(this);
+            Logger.Log($"[SampleChannelBass:{Name}] playInternal() - Calling AddToBassMixAndPlay, channel={channel}, mixer.Handle={bassMixer.Handle}");
+            bool result = bassMixer.AddToBassMixAndPlay(this);
+            Logger.Log($"[SampleChannelBass:{Name}] playInternal() - AddToBassMixAndPlay returned {result}");
+            return result;
         }
 
         private void stopInternal()
@@ -207,8 +218,13 @@ namespace osu.Framework.Audio.Sample
 
         private void ensureChannel() => EnqueueAction(() =>
         {
+            Logger.Log($"[SampleChannelBass:{Name}] ensureChannel() called - hasChannel={hasChannel}");
+            
             if (hasChannel)
+            {
+                Logger.Log($"[SampleChannelBass:{Name}] ensureChannel() - Already has channel, returning");
                 return;
+            }
 
             BassFlags flags = BassFlags.SampleChannelStream | BassFlags.Decode;
 
@@ -218,14 +234,22 @@ namespace osu.Framework.Audio.Sample
             if (RuntimeInfo.OS != RuntimeInfo.Platform.Windows)
                 flags |= BassFlags.AsyncFile;
 
+            Logger.Log($"[SampleChannelBass:{Name}] ensureChannel() - Creating channel from sample {sample.SampleId}");
             channel = Bass.SampleGetChannel(sample.SampleId, flags);
+            
+            Logger.Log($"[SampleChannelBass:{Name}] ensureChannel() - Created channel: {channel}, LastError: {Bass.LastError}");
 
             if (!hasChannel)
+            {
+                Logger.Log($"[SampleChannelBass:{Name}] ensureChannel() - FAILED to create channel!");
                 return;
+            }
 
+            Logger.Log($"[SampleChannelBass:{Name}] ensureChannel() - Setting loop flag and frequency handler");
             setLoopFlag(Looping);
-
             relativeFrequencyHandler.SetChannel(channel);
+            
+            Logger.Log($"[SampleChannelBass:{Name}] ensureChannel() - Channel ready");
         });
 
         #region Mixing
@@ -240,28 +264,53 @@ namespace osu.Framework.Audio.Sample
 
         BassAudioMixer IBassAudioChannel.Mixer => bassMixer;
 
+        bool IBassAudioChannel.IsPlaybackRequested => userRequestedPlay;
+
         void IBassAudio.UpdateDevice(int deviceIndex)
         {
+            Logger.Log($"[SampleChannelBass:{Name}] UpdateDevice({deviceIndex}) called - userRequestedPlay={userRequestedPlay}, hasChannel={hasChannel}, Mixer={Mixer?.Identifier}");
+            
             if (userRequestedPlay)
             {
                 EnqueueAction(() =>
                 {
+                    Logger.Log($"[SampleChannelBass:{Name}] UpdateDevice enqueued action executing");
+                    
                     // This channel handle will become stale (valid but no sound) with device switch & mixer recreate
                     // We clean it up and get a new one
                     // So that samples (especially looping ones) would continue playing after device switch
                     if (Mixer != null)
                     {
+                        Logger.Log($"[SampleChannelBass:{Name}] Removing from mixer tracking");
                         bassMixer.RemoveFromActiveChannels(this);
                         bassMixer.RemoveFromPendingChannels(this);
                     }
+                    else
+                    {
+                        Logger.Log($"[SampleChannelBass:{Name}] Mixer is null, skipping removal");
+                    }
+                    
+                    Logger.Log($"[SampleChannelBass:{Name}] Resetting channel handle (was {channel})");
                     channel = 0;
+                    
+                    Logger.Log($"[SampleChannelBass:{Name}] Calling ensureChannel()...");
                     ensureChannel();
 
                     if (hasChannel)
                     {
-                        playInternal();
+                        Logger.Log($"[SampleChannelBass:{Name}] Channel recreated ({channel}), calling playInternal()...");
+                        bool result = playInternal();
+                        Logger.Log($"[SampleChannelBass:{Name}] playInternal() returned {result}");
+                    }
+                    else
+                    {
+                        Logger.Log($"[SampleChannelBass:{Name}] Failed to recreate channel!");
                     }
                 });
+            }
+            else
+            {
+                Logger.Log($"[SampleChannelBass:{Name}] Skipping UpdateDevice - userRequestedPlay is false");
             }
         }
 
